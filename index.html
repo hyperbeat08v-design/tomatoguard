@@ -1,0 +1,644 @@
+<title>TomatoGuard</title>
+<meta name="description" content="Tomato leaf disease detection with weather early warning.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Hanken+Grotesk:wght@400;500;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* Layout: one fixed WebGL leaf sits behind scrolling story sections that alternate
+   text left / text right. The leaf changes with the scroll: healthy, Early Blight,
+   Late Blight, Leaf Curl, then a scan. Light sheets slide over it, then a tomato-red band. */
+:root {
+  --leaf-950: #071d11;
+  --leaf-900: #0b2a1a;
+  --leaf-800: #11402a;
+  --leaf-500: #2f9250;
+  --lime: #c4e57e;
+  --tomato: #d93a28;
+  --tomato-hover: #e5483a;
+  --tomato-deep: #c42e1d;
+  --mint: #edf5ec;
+  --mint-2: #dfeadd;
+  --ink: #10231a;
+  --ink-soft: #476053;
+  --on-dark: #eaf6ec;
+  --on-dark-soft: #a8c5b2;
+  --ok: #1f7a45;
+  --warn: #b26a00;
+  --bad: #c42e1d;
+  --font-display: 'Bricolage Grotesque', 'Arial Narrow', system-ui, sans-serif;
+  --font-body: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-deva: 'Noto Sans Devanagari', 'Nirmala UI', 'Mangal', sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { background: var(--leaf-950); scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--leaf-950);
+  color: var(--on-dark);
+  font: 400 1rem/1.6 var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+h1, h2, h3 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
+p { margin: 0; }
+a { color: inherit; }
+:focus-visible { outline: 3px solid var(--lime); outline-offset: 3px; border-radius: 6px; }
+
+/* ---------- stage (fixed 3D leaf) ---------- */
+#stage {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(62vmax 62vmax at var(--gx, 74%) var(--gy, 50%), var(--glow, #1f7a45) 0%, transparent 62%),
+    linear-gradient(180deg, var(--leaf-900), var(--leaf-950));
+}
+#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; opacity: 0; transition: opacity .8s ease; }
+#stage.ready #gl { opacity: 1; }
+#flat { position: absolute; left: 50%; top: 50%; width: min(60vh, 70vw); height: min(60vh, 70vw); will-change: transform; }
+#flat canvas { width: 100%; height: 100%; display: block; }
+
+/* ---------- nav ---------- */
+.nav {
+  position: fixed; inset: 0 0 auto 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) max(16px, 3vw) 12px;
+  background: rgba(7, 29, 17, .8);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+}
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font: 800 1.2rem/1 var(--font-display); letter-spacing: -.02em; }
+.brand svg { width: 28px; height: 28px; flex: none; }
+.nav-links { display: flex; align-items: center; gap: clamp(14px, 2.4vw, 32px); }
+.nav-links a.link { color: var(--on-dark-soft); text-decoration: none; font-weight: 500; }
+.nav-links a.link:hover { color: #fff; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  padding: .8rem 1.4rem; border-radius: 999px; border: 0; cursor: pointer;
+  background: var(--tomato); color: #fff; text-decoration: none;
+  font: 700 1rem/1.1 var(--font-body);
+  transition: transform .15s ease, background .15s ease;
+}
+.btn:hover { background: var(--tomato-hover); transform: translateY(-1px); }
+.btn.small { padding: .6rem 1.1rem; font-size: .95rem; }
+.btn.ghost { background: transparent; color: var(--on-dark); box-shadow: inset 0 0 0 1.5px rgba(234, 246, 236, .4); }
+.btn.ghost:hover { background: rgba(255, 255, 255, .08); }
+.btn.dark { background: var(--leaf-900); }
+.btn.dark:hover { background: var(--leaf-800); }
+
+/* ---------- story sections ---------- */
+main { position: relative; z-index: 1; }
+.story {
+  position: relative; z-index: 1;
+  min-height: 100svh;
+  display: flex; align-items: center;
+  padding: calc(env(safe-area-inset-top, 0px) + 84px) max(16px, 5vw) 64px;
+}
+.story.right { justify-content: flex-end; }
+.story.hero { min-height: 92svh; }
+.story.hero .copy { width: min(100%, 40rem); }
+.copy { width: min(100%, 31rem); display: grid; gap: 1.15rem; }
+
+h1 { font-size: clamp(2.7rem, 5.6vw, 5.2rem); line-height: .96; font-weight: 800; letter-spacing: -.035em; }
+.story h2 { font-size: clamp(2rem, 4.2vw, 3.5rem); line-height: 1.02; font-weight: 800; letter-spacing: -.03em; }
+.lead { font-size: clamp(1.05rem, 1.35vw, 1.2rem); color: var(--on-dark-soft); max-width: 34rem; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.fine { font-size: .9rem; color: var(--on-dark-soft); }
+.hi { font: 600 1.15rem/1.5 var(--font-deva); color: var(--lime); }
+
+.facts { display: grid; gap: .6rem; margin: 0; }
+.facts div { display: grid; grid-template-columns: 6.2rem 1fr; gap: .75rem; }
+.facts dt { font-weight: 700; color: var(--lime); }
+.facts dd { margin: 0; }
+.do { background: rgba(255, 255, 255, .07); border-radius: 14px; padding: 1rem 1.1rem; }
+.do strong { color: #fff; }
+.chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.chips li { padding: .45rem .95rem; border-radius: 999px; background: rgba(255, 255, 255, .1); font-weight: 600; }
+
+/* ---------- light sheets ---------- */
+.sheet {
+  position: relative; z-index: 2;
+  background: var(--mint); color: var(--ink);
+  color-scheme: light;
+  padding: clamp(56px, 9vw, 112px) max(16px, 5vw);
+  border-radius: clamp(22px, 4vw, 56px) clamp(22px, 4vw, 56px) 0 0;
+  margin-top: -1px;
+}
+.sheet.alt { background: var(--mint-2); border-radius: 0; }
+.wrap { max-width: 72rem; margin-inline: auto; }
+.sheet h2 { font-size: clamp(1.9rem, 3.8vw, 3.1rem); line-height: 1.04; font-weight: 800; letter-spacing: -.03em; color: var(--leaf-900); }
+.sheet p { color: var(--ink-soft); }
+.split { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: clamp(28px, 5vw, 72px); align-items: start; }
+
+ol.steps { list-style: none; margin: 1.6rem 0 0; padding: 0; display: grid; gap: 1.4rem; }
+ol.steps li { display: grid; grid-template-columns: 2.6rem 1fr; gap: 1rem; }
+ol.steps .n {
+  width: 2.6rem; height: 2.6rem; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--leaf-900); color: var(--lime); font: 800 1.1rem/1 var(--font-display);
+}
+ol.steps h3 { font-size: 1.25rem; color: var(--leaf-900); margin-bottom: .2rem; }
+
+.sample { background: var(--leaf-900); color: var(--on-dark); border-radius: 22px; padding: 1.4rem; display: grid; gap: 1rem; }
+.sample .tag { font-size: .85rem; color: var(--on-dark-soft); }
+.sample .result { background: rgba(217, 58, 40, .18); color: #ffb4a9; font: 800 1.35rem/1.2 var(--font-display); padding: .9rem 1.1rem; border-radius: 12px; }
+.bars { display: grid; gap: .5rem; }
+.bars div { display: grid; grid-template-columns: 8.5rem 1fr; gap: .7rem; align-items: center; font-size: .9rem; color: var(--on-dark-soft); }
+.bars i { display: block; height: 10px; border-radius: 6px; background: rgba(255, 255, 255, .12); position: relative; overflow: hidden; }
+.bars i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w); background: #7cc4ff; border-radius: 6px; }
+.sample ul { margin: 0; padding-left: 1.15rem; display: grid; gap: .5rem; color: var(--on-dark); }
+
+.notes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(20px, 3vw, 40px); margin-top: clamp(40px, 6vw, 72px); }
+.notes h3 { font-size: 1.2rem; color: var(--leaf-900); margin-bottom: .35rem; }
+.notes .hi { color: var(--leaf-800); margin-top: .5rem; }
+
+/* weather widget */
+.sliders { display: grid; gap: 1.2rem; margin: 1.6rem 0 0; }
+.sliders label { display: grid; gap: .4rem; font-weight: 700; color: var(--leaf-900); }
+.sliders output { font-variant-numeric: tabular-nums; color: var(--tomato-deep); }
+.sliders input[type=range] { width: 100%; accent-color: var(--tomato-deep); }
+.risks { display: grid; gap: 12px; }
+.risk { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem 1rem; align-items: center; background: #fff; border-radius: 16px; padding: 1rem 1.1rem; }
+.risk h3 { font-size: 1.1rem; color: var(--leaf-900); }
+.risk small { grid-column: 1; color: var(--ink-soft); font-size: .88rem; }
+.pill { grid-column: 2; grid-row: 1 / span 2; min-width: 5.6rem; text-align: center; padding: .5rem .9rem; border-radius: 999px; font-weight: 800; color: #fff; background: var(--ok); transition: background .2s ease; }
+.pill[data-level="medium"] { background: var(--warn); }
+.pill[data-level="high"] { background: var(--bad); }
+.cap { margin-top: 14px; font-size: .9rem; }
+
+/* results (hidden until RESULTS has numbers) */
+.numbers { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 24px; margin-top: 2rem; }
+.numbers div { background: #fff; border-radius: 16px; padding: 1.2rem; }
+.numbers b { display: block; font: 800 2.6rem/1 var(--font-display); color: var(--leaf-900); font-variant-numeric: tabular-nums; }
+.numbers span { color: var(--ink-soft); }
+
+/* cta band */
+.band { position: relative; z-index: 2; background: var(--tomato-deep); color: #fff; padding: clamp(56px, 8vw, 104px) max(16px, 5vw); text-align: center; }
+.band .wrap { display: grid; gap: 1.2rem; justify-items: center; }
+.band h2 { font-size: clamp(2.1rem, 5vw, 4rem); line-height: 1; font-weight: 800; letter-spacing: -.03em; }
+.band p { max-width: 36rem; color: #ffe3de; }
+footer { position: relative; z-index: 2; background: var(--leaf-950); color: var(--on-dark-soft); padding: 36px max(16px, 5vw) calc(env(safe-area-inset-bottom, 0px) + 36px); font-size: .9rem; }
+footer .wrap { display: grid; gap: .6rem; }
+
+/* ---------- portrait / phone: leaf on top, text below ---------- */
+@media (max-aspect-ratio: 1/1) {
+  .story { display: block; min-height: 0; padding-top: 52svh; padding-bottom: 8svh; }
+  .story.hero { padding-top: 50svh; }
+  .copy, .story.hero .copy { width: min(100%, 36rem); margin-inline: auto; padding: 1.25rem; border-radius: 20px;
+    background: rgba(7, 29, 17, .76); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+  .split { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .nav-links a.link { display: none; }
+  .notes { grid-template-columns: minmax(0, 1fr); }
+  .bars div { grid-template-columns: 7rem 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .btn, .pill, #gl { transition: none; }
+}
+</style>
+
+<div id="stage" aria-hidden="true">
+  <canvas id="gl"></canvas>
+  <div id="flat" hidden><canvas id="flatc" width="768" height="768"></canvas></div>
+</div>
+
+<header class="nav">
+  <a class="brand" href="#hero" aria-label="TomatoGuard home">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="19" r="10.5" fill="#d93a28"/><path d="M16 9.5c-2.2-.2-4.3.7-5.6 2.3 2.2-.1 3.7.4 5.6 2 1.9-1.600 3.400-2.100 5.600-2-1.300-1.600-3.400-2.500-5.600-2.300z" fill="#2f9250"/><path d="M16 9.5V5.500" stroke="#2f9250" stroke-width="2" stroke-linecap="round"/></svg>
+    TomatoGuard
+  </a>
+  <nav class="nav-links" aria-label="Sections">
+    <a class="link" href="#early">Diseases</a>
+    <a class="link" href="#how">How it works</a>
+    <a class="link" href="#weather">Weather risk</a>
+    <a class="btn small" href="https://tomatoguard-dh3umjmeevwpzrp94ahqu8.streamlit.app" target="_blank" rel="noopener">Try the app</a>
+  </nav>
+</header>
+
+<main>
+  <section class="story hero" id="hero" data-pose="hero">
+    <div class="copy">
+      <h1>Show us<br>the leaf.<br>We name<br>the disease.</h1>
+      <p class="lead">TomatoGuard reads a photo of a tomato leaf and tells you whether it has Early Blight, Late Blight or Leaf Curl Virus, or is healthy. Then it tells you what to do next, in English or Hindi.</p>
+      <p class="hi" lang="hi">पत्ती की फोटो डालें, रोग का नाम और उपाय पाएं।</p>
+      <div class="actions">
+        <a class="btn" href="https://tomatoguard-dh3umjmeevwpzrp94ahqu8.streamlit.app" target="_blank" rel="noopener">Open the live app</a>
+        <a class="btn ghost" href="#early">See the three diseases</a>
+      </div>
+      <p class="fine">Free, and it works on a phone. On the first visit the app can take a minute to wake up.</p>
+    </div>
+  </section>
+
+  <section class="story right" id="early" data-pose="early">
+    <div class="copy">
+      <h2>Rings on the oldest leaves</h2>
+      <p class="lead">Early Blight starts on the lower, older leaves as dark brown spots with rings, like a target, and a yellow halo around each one.</p>
+      <dl class="facts">
+        <div><dt>Cause</dt><dd>A fungus, <i>Alternaria solani</i></dd></div>
+        <div><dt>Spreads by</dt><dd>Soil, water splash and old infected plant debris</dd></div>
+        <div><dt>Likes</dt><dd>Warm, humid weather, about 24 to 30 °C with humidity above 80%</dd></div>
+      </dl>
+      <p class="do"><strong>What to do.</strong> Pick off infected lower leaves and destroy them. Water at the root, not over the leaves.</p>
+    </div>
+  </section>
+
+  <section class="story" id="late" data-pose="late">
+    <div class="copy">
+      <h2>Dark, wet patches that spread in days</h2>
+      <p class="lead">Late Blight makes large, water-soaked patches on leaves, with white fuzz underneath in damp weather. On fruit it leaves firm brown rot.</p>
+      <dl class="facts">
+        <div><dt>Cause</dt><dd>A water mould, <i>Phytophthora infestans</i></dd></div>
+        <div><dt>Spreads by</dt><dd>Spores carried on the wind</dd></div>
+        <div><dt>Likes</dt><dd>Cool, very humid weather, about 10 to 25 °C with humidity above 85%</dd></div>
+      </dl>
+      <p class="do"><strong>What to do.</strong> Act the same day. Uproot badly infected plants and keep the leaves dry. Ask your agriculture officer which fungicide to use.</p>
+    </div>
+  </section>
+
+  <section class="story right" id="curl" data-pose="curl">
+    <div class="copy">
+      <h2>Curled, yellow and stunted</h2>
+      <p class="lead">Leaf Curl Virus makes leaves curl upward and turn yellow. Plants stay small and give little fruit.</p>
+      <dl class="facts">
+        <div><dt>Cause</dt><dd>A begomovirus</dd></div>
+        <div><dt>Spreads by</dt><dd>Whiteflies, <i>Bemisia tabaci</i></dd></div>
+        <div><dt>Likes</dt><dd>Warm, dry weather when whiteflies multiply, above 28 °C with humidity below 60%</dd></div>
+      </dl>
+      <p class="do"><strong>What to do.</strong> There is no cure. Remove infected plants, set yellow sticky traps, and use insect nets in the nursery.</p>
+    </div>
+  </section>
+
+  <section class="story scan" id="scan" data-pose="scan">
+    <div class="copy">
+      <h2>One photo, four possible answers</h2>
+      <p class="lead">TomatoGuard compares your leaf with thousands of labelled tomato leaf photos and picks the closest match.</p>
+      <ul class="chips" aria-label="The four answers">
+        <li>Early Blight</li><li>Late Blight</li><li>Leaf Curl Virus</li><li>Healthy</li>
+      </ul>
+      <a class="btn" href="https://tomatoguard-dh3umjmeevwpzrp94ahqu8.streamlit.app" target="_blank" rel="noopener">Try it on your own leaf</a>
+    </div>
+  </section>
+
+  <section class="sheet" id="how">
+    <div class="wrap">
+      <div class="split">
+        <div>
+          <h2>From photo to plan</h2>
+          <ol class="steps">
+            <li><span class="n">1</span><div><h3>Take a photo</h3><p>Get close to one leaf in good light. Upload the photo, or use the camera on your phone.</p></div></li>
+            <li><span class="n">2</span><div><h3>The model reads it</h3><p>A MobileNetV2 model, trained on tomato leaf photos from the PlantVillage dataset, picks one of four classes. If it is less than 60% sure, it asks for a clearer photo instead of guessing.</p></div></li>
+            <li><span class="n">3</span><div><h3>You get a plan</h3><p>The disease name, what to do next in English or Hindi, and a weather risk check for your town.</p></div></li>
+          </ol>
+        </div>
+        <div class="sample" aria-label="Example of the result page">
+          <span class="tag">Example of the result page</span>
+          <div class="result">Leaf Curl Virus</div>
+          <div class="bars" aria-hidden="true">
+            <div>Early Blight<i style="--w:3%"></i></div>
+            <div>Healthy leaf<i style="--w:2%"></i></div>
+            <div>Late Blight<i style="--w:4%"></i></div>
+            <div>Leaf Curl Virus<i style="--w:91%"></i></div>
+          </div>
+          <ul>
+            <li>There is no cure for a virus. Uproot and destroy infected plants so they do not infect others.</li>
+            <li>Use yellow sticky traps, and insect-proof nets in the nursery.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="notes">
+        <div><h3>Hindi and English</h3><p>The whole result page and its advice switch language with one tap.</p><p class="hi" lang="hi">अपनी भाषा में सलाह पाएं।</p></div>
+        <div><h3>Honest about doubt</h3><p>It only knows tomato leaves and four classes. A blurry or non-tomato photo can give a wrong answer, so check with your local agriculture officer before spraying.</p></div>
+        <div><h3>Nothing to install</h3><p>It runs in the browser on any phone or laptop. No account, no download.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sheet alt" id="weather">
+    <div class="wrap">
+      <div class="split">
+        <div>
+          <h2>Will today's weather help the disease?</h2>
+          <p style="margin-top:.9rem;max-width:30rem">Move the sliders to see how temperature and humidity change the risk. The app uses the same rules with your town's weather for today.</p>
+          <div class="sliders">
+            <label for="temp">Temperature <output id="tempOut" for="temp">20 °C</output>
+              <input id="temp" type="range" min="5" max="42" step="1" value="20"></label>
+            <label for="hum">Humidity <output id="humOut" for="hum">88%</output>
+              <input id="hum" type="range" min="20" max="100" step="1" value="88"></label>
+          </div>
+        </div>
+        <div>
+          <div class="risks" aria-live="polite">
+            <div class="risk"><h3>Late Blight</h3><small>High: humidity 85%+ and 10 to 25 °C</small><span class="pill" id="pLate" data-level="low">Low</span></div>
+            <div class="risk"><h3>Early Blight</h3><small>High: humidity 80%+ and 24 to 30 °C</small><span class="pill" id="pEarly" data-level="low">Low</span></div>
+            <div class="risk"><h3>Leaf Curl Virus (whiteflies)</h3><small>High: 28 °C or more and humidity 60% or less</small><span class="pill" id="pFly" data-level="low">Low</span></div>
+          </div>
+          <p class="cap">A simple rule-based guide for learning, not a weather forecast.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sheet" id="results" hidden>
+    <div class="wrap">
+      <h2>How well does it work?</h2>
+      <p id="resultsNote" style="margin-top:.8rem;max-width:40rem"></p>
+      <div class="numbers" id="resultsNumbers"></div>
+    </div>
+  </section>
+
+  <section class="band" id="try">
+    <div class="wrap">
+      <h2>Try it on a leaf now</h2>
+      <p>Upload a tomato leaf photo and get the disease name and what to do next. The first visit can take a minute while the app wakes up.</p>
+      <a class="btn dark" href="https://tomatoguard-dh3umjmeevwpzrp94ahqu8.streamlit.app" target="_blank" rel="noopener">Open TomatoGuard</a>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <strong style="color:var(--on-dark)">TomatoGuard</strong>
+    <p>A PBL project by a team of three: one AIA and two CC students.</p>
+    <p>Student project. It is not a substitute for advice from an agriculture officer.</p>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+'use strict';
+
+/* Fill these in after training to show a results section. Leave as null to hide it. */
+const RESULTS = { accuracy: null, precision: null, recall: null, note: '' };
+
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const stackedMQ = matchMedia('(max-aspect-ratio: 1/1)');
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+
+/* ================= leaf texture (2D canvas, drawn in code) ================= */
+const S = 768;
+const LEAF = { cx: S / 2, top: S * 0.035, base: S * 0.965 };
+function rng(seed) { let s = seed >>> 0; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; }
+function halfWidth(t, side) {
+  const body = Math.pow(Math.sin(Math.PI * Math.pow(t, 0.72)), 0.85);
+  const lobes = 1 + 0.085 * Math.sin(t * Math.PI * 5 + 0.6) + 0.04 * Math.sin(t * Math.PI * 17);
+  return S * 0.37 * body * lobes * (side < 0 ? 1 : 0.9);
+}
+const midX = t => LEAF.cx + S * 0.03 * Math.sin(t * Math.PI * 1.1);
+const yAt = t => LEAF.base - t * (LEAF.base - LEAF.top);
+function leafPath(ctx) {
+  const N = 160;
+  ctx.beginPath();
+  for (let i = 0; i <= N; i++) { const t = i / N; const x = midX(t) - halfWidth(t, -1), y = yAt(t); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  for (let i = N; i >= 0; i--) { const t = i / N; ctx.lineTo(midX(t) + halfWidth(t, 1), yAt(t)); }
+  ctx.closePath();
+}
+function drawVeins(ctx, col) {
+  ctx.strokeStyle = col; ctx.lineCap = 'round';
+  for (let i = 0; i < 60; i++) {
+    const t0 = i / 60 * 0.97, t1 = (i + 1) / 60 * 0.97;
+    ctx.lineWidth = 11 * (1 - t0) + 2; ctx.beginPath(); ctx.moveTo(midX(t0), yAt(t0)); ctx.lineTo(midX(t1), yAt(t1)); ctx.stroke();
+  }
+  for (let k = 0; k < 9; k++) {
+    const t0 = 0.07 + k * 0.095;
+    [-1, 1].forEach(side => {
+      const t1 = Math.min(0.97, t0 + 0.17);
+      const sx = midX(t0), sy = yAt(t0);
+      const ex = midX(t1) + side * halfWidth(t1, side) * 0.9, ey = yAt(t1);
+      const cx = midX(t0) + side * halfWidth(Math.min(1, t0 + 0.07), side) * 0.75, cy = yAt(t0 + 0.02);
+      ctx.lineWidth = 4.5 * (1 - t0) + 1.2; ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo(cx, cy, ex, ey); ctx.stroke();
+    });
+  }
+}
+const baseC = document.createElement('canvas'); baseC.width = baseC.height = S;
+(function drawBase() {
+  const ctx = baseC.getContext('2d');
+  ctx.save(); leafPath(ctx); ctx.clip();
+  const g = ctx.createLinearGradient(0, LEAF.base, 0, LEAF.top);
+  g.addColorStop(0, '#256f35'); g.addColorStop(.55, '#2f9a45'); g.addColorStop(1, '#52bb5c');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
+  const r = rng(7);
+  for (let i = 0; i < 320; i++) {
+    const x = r() * S, y = r() * S, rad = 6 + r() * 26;
+    ctx.fillStyle = r() < .5 ? 'rgba(15,70,30,.07)' : 'rgba(150,220,120,.06)';
+    ctx.beginPath(); ctx.arc(x, y, rad, 0, 7); ctx.fill();
+  }
+  drawVeins(ctx, 'rgba(205,240,170,.75)');
+  ctx.restore();
+  leafPath(ctx); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(10,50,22,.55)'; ctx.stroke();
+})();
+
+function drawEarly(ctx, g) {
+  const spots = [[.22,-1,.45,46],[.32,1,.5,56],[.42,-1,.55,40],[.5,1,.35,34],[.28,1,.2,28],[.58,-1,.3,30],[.66,1,.45,24],[.14,-1,.2,24]];
+  spots.forEach(([t, side, off, rad]) => {
+    const x = midX(t) + side * halfWidth(t, side) * off, y = yAt(t), R = rad * g;
+    const halo = ctx.createRadialGradient(x, y, R * .9, x, y, R * 2.2);
+    halo.addColorStop(0, `rgba(226,204,62,${.6 * Math.min(1, g * 1.3)})`); halo.addColorStop(1, 'rgba(226,204,62,0)');
+    ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(x, y, R * 2.2, 0, 7); ctx.fill();
+    ctx.fillStyle = '#6a3f1b'; ctx.beginPath(); ctx.arc(x, y, R, 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(38,18,6,.75)'; ctx.lineWidth = 3;
+    for (let j = 1; j <= 4; j++) { ctx.beginPath(); ctx.arc(x, y, R * j / 4.4, 0, 7); ctx.stroke(); }
+    ctx.fillStyle = '#2a1608'; ctx.beginPath(); ctx.arc(x, y, R * .16, 0, 7); ctx.fill();
+  });
+}
+function blob(ctx, x, y, R, seed) {
+  const r = rng(seed), n = 14, pts = [];
+  for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, d = R * (.72 + r() * .55); pts.push([x + Math.cos(a) * d, y + Math.sin(a) * d]); }
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], q = pts[(i + 1) % n], mx = (p[0] + q[0]) / 2, my = (p[1] + q[1]) / 2;
+    i ? ctx.quadraticCurveTo(p[0], p[1], mx, my) : ctx.moveTo(mx, my);
+  }
+  ctx.closePath();
+}
+function drawLate(ctx, g) {
+  const patches = [[.7,1,.72,90],[.45,-1,.8,80],[.25,1,.7,60],[.88,-1,.4,50],[.55,1,.3,42]];
+  patches.forEach(([t, side, off, rad], i) => {
+    const x = midX(t) + side * halfWidth(t, side) * off, y = yAt(t), R = rad * g;
+    ctx.fillStyle = `rgba(122,142,100,${.5 * Math.min(1, g * 1.4)})`; blob(ctx, x, y, R * 1.4, 30 + i); ctx.fill();
+    ctx.fillStyle = '#243326'; blob(ctx, x, y, R, 40 + i); ctx.fill();
+    ctx.fillStyle = '#16221a'; blob(ctx, x, y, R * .55, 50 + i); ctx.fill();
+    const r = rng(60 + i);
+    for (let k = 0; k < 36; k++) {
+      const a = r() * Math.PI * 2, d = R * (1.05 + r() * .25);
+      ctx.fillStyle = `rgba(236,242,230,${.5 * Math.min(1, g * 1.4)})`;
+      ctx.beginPath(); ctx.arc(x + Math.cos(a) * d, y + Math.sin(a) * d, 1.5 + r() * 3, 0, 7); ctx.fill();
+    }
+  });
+}
+const tex = document.createElement('canvas'); tex.width = tex.height = S;
+const tctx = tex.getContext('2d');
+function compose(st) {
+  tctx.globalCompositeOperation = 'source-over';
+  tctx.clearRect(0, 0, S, S);
+  tctx.drawImage(baseC, 0, 0);
+  tctx.globalCompositeOperation = 'source-atop';
+  if (st.curl > .01) { tctx.fillStyle = `rgba(212,214,72,${.78 * st.curl})`; tctx.fillRect(0, 0, S, S); drawVeins(tctx, `rgba(78,160,70,${.55 * st.curl})`); }
+  if (st.early > .05) drawEarly(tctx, st.early);
+  if (st.late > .05) drawLate(tctx, st.late);
+  tctx.globalCompositeOperation = 'source-over';
+}
+
+/* ================= poses per section ================= */
+const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const POSES = {
+  hero: { x: .52, y: 0, s: 1, rx: .10, ry: -.45, rz: -.35, early: 0, late: 0, curl: 0, scan: 0, glow: hex('#1f7a45') },
+  early:{ x: -.52, y: 0, s: 1, rx: .05, ry: .5, rz: .25, early: 1, late: 0, curl: 0, scan: 0, glow: hex('#6b4a1c') },
+  late: { x: .52, y: 0, s: 1, rx: .10, ry: -.5, rz: -.2, early: 0, late: 1, curl: 0, scan: 0, glow: hex('#1d4c55') },
+  curl: { x: -.52, y: 0, s: 1, rx: -.1, ry: .45, rz: .3, early: 0, late: 0, curl: 1, scan: 0, glow: hex('#6b6a1a') },
+  scan: { x: .52, y: .02, s: 1.02, rx: 0, ry: -.2, rz: -.08, early: 0, late: 1, curl: 0, scan: 1, glow: hex('#1f7a45') },
+};
+const NUM = ['x','y','s','rx','ry','rz','early','late','curl','scan'];
+const sections = [...document.querySelectorAll('[data-pose]')];
+function targetPose() {
+  const stacked = stackedMQ.matches;
+  const vy = scrollY + innerHeight * .5;
+  const anchors = sections.map(el => { const r = el.getBoundingClientRect(); return { k: el.dataset.pose, a: r.top + scrollY + r.height / 2 }; });
+  let i = 0; while (i < anchors.length - 1 && anchors[i + 1].a <= vy) i++;
+  const A = anchors[i], B = anchors[Math.min(i + 1, anchors.length - 1)];
+  let t = B.a === A.a ? 0 : clamp((vy - A.a) / (B.a - A.a), 0, 1);
+  t = t * t * (3 - 2 * t);
+  const pa = POSES[A.k], pb = POSES[B.k], o = {};
+  NUM.forEach(n => o[n] = lerp(pa[n], pb[n], t));
+  o.glow = pa.glow.map((c, j) => lerp(c, pb.glow[j], t));
+  if (stacked) { o.x = 0; o.y = .43; o.s = o.s * .52; }
+  return o;
+}
+let cur = null;
+
+/* ================= WebGL ================= */
+const stage = document.getElementById('stage');
+let renderer, scene, camera, leaf, geo, baseArr, tex3, motes, bar, glow2, flatMode = false;
+function initGL() {
+  if (!window.THREE) return false;
+  try {
+    renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), antialias: true, alpha: true });
+  } catch (e) { return false; }
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(40, 1, .1, 50); camera.position.set(0, 0, 6);
+  geo = new THREE.PlaneGeometry(3.0, 3.8, 36, 52);
+  baseArr = new Float32Array(geo.attributes.position.array);
+  tex3 = new THREE.CanvasTexture(tex); tex3.encoding = THREE.sRGBEncoding; tex3.anisotropy = 4;
+  const mat = new THREE.MeshStandardMaterial({ map: tex3, side: THREE.DoubleSide, roughness: .5, metalness: 0, alphaTest: .45 });
+  leaf = new THREE.Mesh(geo, mat); scene.add(leaf);
+  scene.add(new THREE.HemisphereLight(0xe8ffe0, 0x0b2a18, .95));
+  const key = new THREE.DirectionalLight(0xffffff, 1.25); key.position.set(-2.5, 3.5, 4); scene.add(key);
+  const rim = new THREE.PointLight(0xff5a3c, .9, 12); rim.position.set(3, -1, -1.5); scene.add(rim);
+  bar = new THREE.Mesh(new THREE.PlaneGeometry(3.3, .045), new THREE.MeshBasicMaterial({ color: 0xc4e57e, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+  glow2 = new THREE.Mesh(new THREE.PlaneGeometry(3.3, .5), new THREE.MeshBasicMaterial({ color: 0xc4e57e, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+  bar.position.z = .12; glow2.position.z = .1; leaf.add(bar); leaf.add(glow2);
+  const N = 150, pp = new Float32Array(N * 3), r = rng(11);
+  for (let i = 0; i < N; i++) { pp[i*3] = (r() - .5) * 9; pp[i*3+1] = (r() - .5) * 5.5; pp[i*3+2] = (r() - .5) * 3 - .5; }
+  const pg = new THREE.BufferGeometry(); pg.setAttribute('position', new THREE.BufferAttribute(pp, 3));
+  motes = new THREE.Points(pg, new THREE.PointsMaterial({ size: .03, color: 0xffffff, transparent: true, opacity: .45, depthWrite: false }));
+  scene.add(motes);
+  resize();
+  return true;
+}
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  if (renderer) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+}
+function deform(time, curl) {
+  const p = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < p.count; i++) {
+    const u = uv.getX(i) * 2 - 1, v = uv.getY(i), au = Math.abs(u);
+    const bx = baseArr[i*3], by = baseArr[i*3+1];
+    let z = .10 * au * au - .16 * v * v + (reduce ? 0 : .025 * Math.sin(time * 1.4 + v * 4 + u * 2));
+    z += curl * (.95 * Math.pow(au, 2.3) + .35 * v * v * v) + curl * .05 * Math.sin(u * 10 + v * 8) * Math.sin(v * 12);
+    p.setXYZ(i, bx * (1 - curl * .22 * au), by, z);
+  }
+  p.needsUpdate = true; geo.computeVertexNormals();
+}
+
+/* ================= main loop ================= */
+let lastKey = '', last = performance.now(), flatCtx = null;
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now;
+  const tgt = targetPose();
+  if (!cur) cur = JSON.parse(JSON.stringify(tgt));
+  const k = reduce ? 1 : 1 - Math.exp(-dt * 6);
+  NUM.forEach(n => cur[n] = lerp(cur[n], tgt[n], k));
+  cur.glow = cur.glow.map((c, j) => lerp(c, tgt.glow[j], k));
+
+  const key = [cur.early, cur.late, cur.curl].map(v => Math.round(v * 30)).join();
+  if (key !== lastKey) {
+    lastKey = key; compose(cur);
+    if (tex3) tex3.needsUpdate = true;
+    if (flatMode && flatCtx) { flatCtx.clearRect(0, 0, S, S); flatCtx.drawImage(tex, 0, 0); }
+  }
+  const t = now / 1000, stacked = stackedMQ.matches;
+  stage.style.setProperty('--glow', `rgb(${cur.glow.map(Math.round).join(',')})`);
+  stage.style.setProperty('--gx', (50 + cur.x * 50) + '%');
+  stage.style.setProperty('--gy', (50 - cur.y * 50 + (stacked ? -4 : 0)) + '%');
+
+  const wob = reduce ? 0 : 1;
+  if (!flatMode) {
+    const halfH = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.position.z, halfW = halfH * camera.aspect;
+    leaf.position.set(cur.x * halfW, cur.y * halfH, 0);
+    leaf.scale.setScalar(cur.s);
+    leaf.rotation.set(cur.rx + wob * .03 * Math.sin(t * .7), cur.ry + wob * .08 * Math.sin(t * .6), cur.rz + wob * .03 * Math.sin(t * .8));
+    deform(t, cur.curl);
+    bar.material.opacity = cur.scan * .9; glow2.material.opacity = cur.scan * .16;
+    const by = Math.sin(t * 1.1) * 1.7; bar.position.y = by; glow2.position.y = by;
+    // drifting motes: warm for Early Blight, cold for Late Blight, pale and larger for whiteflies
+    const pa = motes.geometry.attributes.position;
+    for (let i = 0; i < pa.count; i++) {
+      let y = pa.getY(i) + dt * (.12 + cur.curl * .1) * wob;
+      if (y > 2.8) y = -2.8; pa.setY(i, y);
+    }
+    pa.needsUpdate = true;
+    motes.material.color.setRGB(lerp(lerp(1, .88, cur.early), .72, cur.late), lerp(lerp(1, .78, cur.early), .8, cur.late), lerp(lerp(1, .45, cur.early), .86, cur.late));
+    motes.material.size = .03 + cur.curl * .03;
+    renderer.render(scene, camera);
+  } else {
+    const f = document.getElementById('flat');
+    f.style.transform = `translate(calc(-50% + ${cur.x * 50}vw), calc(-50% - ${cur.y * 50}vh)) rotate(${-cur.rz}rad) scale(${cur.s})`;
+  }
+  requestAnimationFrame(frame);
+}
+
+if (initGL()) {
+  stage.classList.add('ready');
+} else {
+  flatMode = true;
+  document.getElementById('gl').hidden = true;
+  const f = document.getElementById('flat'); f.hidden = false;
+  flatCtx = document.getElementById('flatc').getContext('2d');
+  stage.classList.add('ready');
+}
+addEventListener('resize', resize);
+requestAnimationFrame(frame);
+
+/* ================= weather risk sliders (same rules as the app) ================= */
+const rules = {
+  late:  (t, h) => h >= 85 && t >= 10 && t <= 25 ? 'high' : h >= 75 && t >= 10 && t <= 28 ? 'medium' : 'low',
+  early: (t, h) => h >= 80 && t >= 24 && t <= 30 ? 'high' : h >= 70 && t >= 20 && t <= 32 ? 'medium' : 'low',
+  fly:   (t, h) => t >= 28 && h <= 60 ? 'high' : t >= 25 && h <= 70 ? 'medium' : 'low',
+};
+const label = { low: 'Low', medium: 'Medium', high: 'High' };
+const T = document.getElementById('temp'), H = document.getElementById('hum');
+function updateRisk() {
+  const t = +T.value, h = +H.value;
+  document.getElementById('tempOut').textContent = t + ' °C';
+  document.getElementById('humOut').textContent = h + '%';
+  [['pLate', 'late'], ['pEarly', 'early'], ['pFly', 'fly']].forEach(([id, r]) => {
+    const lv = rules[r](t, h), el = document.getElementById(id);
+    el.dataset.level = lv; el.textContent = label[lv];
+  });
+}
+T.addEventListener('input', updateRisk); H.addEventListener('input', updateRisk); updateRisk();
+
+/* ================= optional results section ================= */
+(function results() {
+  const items = [['Accuracy', RESULTS.accuracy], ['Precision', RESULTS.precision], ['Recall', RESULTS.recall]].filter(x => x[1] !== null);
+  if (!items.length) return;
+  document.getElementById('results').hidden = false;
+  document.getElementById('resultsNote').textContent = RESULTS.note || 'Measured on photos the model never saw during training.';
+  document.getElementById('resultsNumbers').innerHTML = items.map(([n, v]) => `<div><b>${v}%</b><span>${n}</span></div>`).join('');
+})();
+})();
+</script>
