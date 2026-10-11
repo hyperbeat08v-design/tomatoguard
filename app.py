@@ -4,8 +4,13 @@ Needs two files next to this one (both downloaded from the Colab notebook):
     tomato_model.keras
     class_names.json
 """
+import base64
+import csv
+import hashlib
 import html
+import io
 import json
+from datetime import datetime, timedelta, timezone
 from statistics import mean
 
 import numpy as np
@@ -29,6 +34,13 @@ UI = {
         "steps": ["Take a photo", "Upload it", "Get the plan"],
         "tab_diag": "Check a leaf",
         "tab_weather": "Weather risk",
+        "tab_hist": "Scan history",
+        "hist_title": "Your recent scans",
+        "hist_empty": "No scans yet. Check a leaf and it will appear here.",
+        "hist_note": "History is kept only while this page stays open. Download it as a file to keep it.",
+        "hist_clear": "Clear history",
+        "hist_dl": "Download history (CSV)",
+        "hist_unsure": "Not sure",
         "tip": "For the best result, take a close-up of one leaf in good light, with a plain background.",
         "upload": "Upload a clear photo of one tomato leaf",
         "camera": "Or take a photo with the camera",
@@ -71,6 +83,13 @@ UI = {
         "steps": ["फोटो लें", "अपलोड करें", "उपाय पाएं"],
         "tab_diag": "पत्ती जांचें",
         "tab_weather": "मौसम जोखिम",
+        "tab_hist": "पिछली जांचें",
+        "hist_title": "आपकी हाल की जांचें",
+        "hist_empty": "अभी कोई जांच नहीं हुई। पत्ती जांचें, नतीजा यहां दिखेगा।",
+        "hist_note": "यह इतिहास सिर्फ तब तक रहता है जब तक यह पेज खुला है। रखने के लिए फ़ाइल के रूप में डाउनलोड करें।",
+        "hist_clear": "इतिहास साफ़ करें",
+        "hist_dl": "इतिहास डाउनलोड करें (CSV)",
+        "hist_unsure": "पक्का नहीं",
         "tip": "बेहतर नतीजे के लिए अच्छी रोशनी में, सादी पृष्ठभूमि के साथ, एक पत्ती की पास से फोटो लें।",
         "upload": "टमाटर की एक पत्ती की साफ़ फोटो अपलोड करें",
         "camera": "या कैमरे से फोटो लें",
@@ -286,6 +305,11 @@ html, body, .stApp, [data-testid="stAppViewContainer"] {
 .tg-pill { white-space:nowrap; flex:none; min-width:5.4rem; text-align:center; padding:.45rem 1rem; border-radius:999px; font-weight:800; color:#fff; background:#1f7a45; }
 .tg-pill.medium { background:#b26a00; }
 .tg-pill.high { background:#c42e1d; }
+.tg-hist { display:grid; grid-template-columns:4rem 1fr auto; gap:.9rem; align-items:center; background:var(--card); border-radius:16px; padding:.7rem .9rem; margin-bottom:.6rem; }
+.tg-hist img { width:4rem; height:4rem; object-fit:cover; border-radius:12px; display:block; }
+.tg-hist strong { display:block; color:var(--on); }
+.tg-hist small { color:var(--soft); font-size:.86rem; }
+.tg-dot { display:inline-block; width:.6rem; height:.6rem; border-radius:50%; background:var(--c); margin-right:.45rem; }
 .tg-foot { margin-top:2.4rem; color:var(--soft); font-size:.88rem; }
 
 @media (max-width: 640px) {
@@ -388,7 +412,7 @@ def hero(t):
     back = f'<a class="tg-back" href="{h(WEBSITE_URL)}" target="_blank" rel="noopener">{h(t["back"])}</a>' if WEBSITE_URL else ""
     steps = "".join(f"<li><b>{i}</b>{h(s)}</li>" for i, s in enumerate(t["steps"], 1))
     md(f"""
-    <div class="tg-top"><span class="tg-brand"><span class="tg-dot"></span>TomatoGuard</span>{back}</div>
+    <div class="tg-top"><span class="tg-brand">TomatoGuard</span>{back}</div>
     <div class="tg-hero"><h1>{h(t["hero_title"])}</h1>
     <p class="tg-sub-lead">{h(t["subtitle"])}</p>
     <ol class="tg-steps">{steps}</ol></div>
@@ -401,6 +425,61 @@ def show_image(image):
         st.image(image, width="stretch")
     except Exception:
         st.image(image, use_container_width=True)
+
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def thumb_uri(image):
+    small = ImageOps.fit(image.convert("RGB"), (96, 96))
+    buf = io.BytesIO()
+    small.save(buf, format="JPEG", quality=70)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def remember(source, image, cls, conf, sure):
+    """Add this scan to the session history once (reruns must not add it again)."""
+    key = hashlib.md5(source.getvalue()).hexdigest()
+    seen = st.session_state.setdefault("seen", set())
+    if key in seen:
+        return
+    seen.add(key)
+    st.session_state.setdefault("history", []).insert(0, {
+        "time": datetime.now(IST).strftime("%d %b, %I:%M %p"),
+        "cls": cls, "conf": conf, "sure": sure, "thumb": thumb_uri(image),
+    })
+    del st.session_state["history"][30:]
+
+
+def history_tab(t, lang):
+    hist = st.session_state.get("history", [])
+    md(f'<div class="tg-h" style="margin-top:.4rem">{h(t["hist_title"])}</div>')
+    if not hist:
+        md(f'<p class="tg-tip">{h(t["hist_empty"])}</p>')
+        return
+    rows = ""
+    for e in hist:
+        info = DISEASE.get(e["cls"], FALLBACK)
+        name = info.get("name", {}).get(lang, e["cls"]) if e["sure"] else t["hist_unsure"]
+        col = info["color"] if e["sure"] else "#e0a23b"
+        rows += (f'<div class="tg-hist" style="--c:{col}"><img src="{e["thumb"]}" alt="">'
+                 f'<div><strong>{h(name)}</strong><small>{h(e["time"])}</small></div>'
+                 f'<span class="tg-pill" style="background:{col};color:#0b2a1a">{e["conf"] * 100:.0f}%</span></div>')
+    md(rows)
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["time", "result", "confidence_percent"])
+    for e in hist:
+        w.writerow([e["time"], e["cls"] if e["sure"] else "not_sure", f'{e["conf"] * 100:.1f}'])
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button(t["hist_dl"], out.getvalue(), file_name="tomatoguard_history.csv", mime="text/csv")
+    with c2:
+        if st.button(t["hist_clear"]):
+            st.session_state["history"] = []
+            st.session_state["seen"] = set()
+            st.rerun()
+    md(f'<p class="tg-fine">{h(t["hist_note"])}</p>')
 
 
 def diagnose_tab(t, lang):
@@ -432,6 +511,7 @@ def diagnose_tab(t, lang):
     color = info["color"]
     pct = round(conf * 100)
     sure = conf >= MIN_CONFIDENCE
+    remember(source, image, cls, conf, sure)
 
     left, right = st.columns([1, 1.15], gap="large")
     with left:
@@ -511,11 +591,13 @@ def main():
     t = UI[lang]
 
     hero(t)
-    tab1, tab2 = st.tabs([t["tab_diag"], t["tab_weather"]])
+    tab1, tab2, tab3 = st.tabs([t["tab_diag"], t["tab_weather"], t["tab_hist"]])
     with tab1:
         diagnose_tab(t, lang)
     with tab2:
         weather_tab(t)
+    with tab3:
+        history_tab(t, lang)
     md(f'<p class="tg-foot">{h(t["footer"])}</p>')
 
 
